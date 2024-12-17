@@ -1,0 +1,13 @@
+HeartRateTile {
+    background: $boost;
+    height: 5;
+    margin: 1;
+    width: 20;
+    padding: 1;
+}
+
+Digits {
+    text-align: center;
+    color: $foreground-muted;
+    height: 3;
+}
