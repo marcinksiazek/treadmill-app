@@ -1,32 +1,14 @@
-from textual import on
-from textual.app import App, ComposeResult
-from textual.containers import Horizontal, HorizontalGroup, VerticalScroll, HorizontalScroll, Container
-from textual.widgets import Button, Footer, Log, RadioSet, RadioButton
-from textual.widgets import Digits, Header, Label
-from textual.reactive import reactive
-from bleak import BleakScanner, BleakClient, BLEDevice
 import asyncio
-from textual import work
+from bleak import BleakClient, BLEDevice
+from textual import on, work
+from textual.app import App, ComposeResult
+from textual.containers import HorizontalScroll
+from textual.reactive import reactive
+from textual.widgets import Button, Header, Footer, Log
 from textual.worker import Worker
+import bt_heart_rate
 from bluetooth_device_picker import BluetoothDevicePicker
-
-HEART_RATE_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb"
-HEART_RATE_MEASUREMENT_CHARACTERISTIC_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
-
-
-class HeartRateTile(HorizontalGroup):
-    """A HR tile widget."""
-
-    hr: reactive[int] = reactive(0)
-
-    def compose(self) -> ComposeResult:
-        """Create child widgets of a stopwatch."""
-        yield Digits("123")
-        yield Label("bpm")
-
-    def watch_hr(self, hr: int) -> None:
-        """Called when the hr attribute changes."""
-        self.query_one(Digits).update(f"{hr}" if hr > 0 else "---")
+from heart_rate_tile import HeartRateTile
 
 
 class FitnessApp(App):
@@ -46,12 +28,12 @@ class FitnessApp(App):
         yield Log()
 
     @on(Button.Pressed, "#connect-hr")
-    def connect_hr_pressed(self, event: Button.Pressed) -> None:
+    def connect_hr_pressed(self) -> None:
         self.append_log("Discovering HR devices...")
-        self.push_screen(BluetoothDevicePicker(HEART_RATE_SERVICE_UUID), self.hr_device_selected)
+        self.push_screen(BluetoothDevicePicker(bt_heart_rate.service_uuid()), self.hr_device_selected)
 
     @on(Button.Pressed, "#disconnect-hr")
-    def disconnect_hr_pressed(self, event: Button.Pressed) -> None:
+    def disconnect_hr_pressed(self) -> None:
         self.append_log("Cancelling HR worker...")
         if self.hr_worker and self.hr_worker.is_running:
             self.hr_worker.cancel()
@@ -78,10 +60,10 @@ class FitnessApp(App):
         self.append_log("Subscribing for HR notifications...")
 
         def heart_rate_handler(sender, data):
-            self.hr = int(data[1])
+            self.hr = bt_heart_rate.parse_hr_data(data)
 
         async with BleakClient(device) as client:
-            await client.start_notify("00002a37-0000-1000-8000-00805f9b34fb", heart_rate_handler)
+            await client.start_notify(bt_heart_rate.measurement_uuid(), heart_rate_handler)
             while True:
                 await asyncio.sleep(1)
                 # TODO: Handle disconnection
