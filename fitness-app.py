@@ -8,47 +8,10 @@ from bleak import BleakScanner, BleakClient, BLEDevice
 import asyncio
 from textual import work
 from textual.worker import Worker
-from textual.screen import ModalScreen
-
+from bluetooth_device_picker import BluetoothDevicePicker
 
 HEART_RATE_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb"
 HEART_RATE_MEASUREMENT_CHARACTERISTIC_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
-
-
-class BluetoothDevicePicker(ModalScreen):
-    selected_device_index: int = None
-    stop_event = asyncio.Event()
-    scanner: BleakScanner = None
-    discovered_devices = []
-
-    def compose(self) -> ComposeResult:
-        with Container():
-            yield Label("Select a Bluetooth Device")
-            yield RadioSet()
-            with Horizontal():
-                yield Button.success("Yes", id="yes")
-                yield Button.error("No", id="no")
-
-    async def on_mount(self) -> None:
-
-        def callback(device, advertising_data):
-            if device.address not in [d.address for d in self.discovered_devices]:
-                self.discovered_devices.append(device)
-                self.query_one(RadioSet).mount(RadioButton(device.name))
-            pass
-
-        self.scanner = BleakScanner(callback, [HEART_RATE_SERVICE_UUID])
-        await self.scanner.start()
-
-    def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
-            self.selected_device_index = event.radio_set.pressed_index
-
-    @on(Button.Pressed)
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "yes" and self.selected_device_index is not None:
-            self.dismiss(self.discovered_devices[self.selected_device_index])
-        else:
-            self.dismiss()
 
 
 class HeartRateTile(HorizontalGroup):
@@ -78,14 +41,14 @@ class FitnessApp(App):
         yield Header(show_clock=True)
         yield Footer()
         yield HorizontalScroll(HeartRateTile().data_bind(FitnessApp.hr),
-                             Button("Connect HR", id="connect-hr", variant="success"),
-                             Button("Disconnect HR", id="disconnect-hr", variant="error"))
+                               Button("Connect HR", id="connect-hr", variant="success"),
+                               Button("Disconnect HR", id="disconnect-hr", variant="error"))
         yield Log()
 
     @on(Button.Pressed, "#connect-hr")
     def connect_hr_pressed(self, event: Button.Pressed) -> None:
         self.append_log("Discovering HR devices...")
-        self.push_screen(BluetoothDevicePicker(), self.hr_device_selected)
+        self.push_screen(BluetoothDevicePicker(HEART_RATE_SERVICE_UUID), self.hr_device_selected)
 
     @on(Button.Pressed, "#disconnect-hr")
     def disconnect_hr_pressed(self, event: Button.Pressed) -> None:
