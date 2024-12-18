@@ -1,37 +1,54 @@
 from textual import on
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, HorizontalGroup, VerticalScroll
-from textual.widgets import Button, Footer, Log
+from textual.containers import Horizontal, HorizontalGroup, VerticalScroll, HorizontalScroll, Container
+from textual.widgets import Button, Footer, Log, RadioSet, RadioButton
 from textual.widgets import Digits, Header, Label
 from textual.reactive import reactive
-from bleak import BleakScanner, BleakClient
+from bleak import BleakScanner, BleakClient, BLEDevice
 import asyncio
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
+from textual import work
+from textual.worker import Worker
+from textual.screen import ModalScreen
 
-current_hr = 5
 
 HEART_RATE_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb"
 HEART_RATE_MEASUREMENT_CHARACTERISTIC_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
 
 
-def discover_devices(app: "FitnessApp") -> None:
-    found_device = None
-    global current_hr
-    current_hr = 22
+class BluetoothDevicePicker(ModalScreen):
+    selected_device_index: int = None
+    stop_event = asyncio.Event()
+    scanner: BleakScanner = None
+    discovered_devices = []
 
-    async def detection_callback(device, advertisement_data):
-        nonlocal found_device
-        global current_hr
-        found_device = device
-        current_hr = 666
+    def compose(self) -> ComposeResult:
+        with Container():
+            yield Label("Select a Bluetooth Device")
+            yield RadioSet()
+            with Horizontal():
+                yield Button.success("Yes", id="yes")
+                yield Button.error("No", id="no")
 
-    app.append_log("Discovering devices...")
-    scanner = BleakScanner(detection_callback)
-    app.append_log("Acanner initiated...")
+    async def on_mount(self) -> None:
 
-    time.sleep(10)
+        def callback(device, advertising_data):
+            if device.address not in [d.address for d in self.discovered_devices]:
+                self.discovered_devices.append(device)
+                self.query_one(RadioSet).mount(RadioButton(device.name))
+            pass
+
+        self.scanner = BleakScanner(callback, [HEART_RATE_SERVICE_UUID])
+        await self.scanner.start()
+
+    def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
+            self.selected_device_index = event.radio_set.pressed_index
+
+    @on(Button.Pressed)
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "yes" and self.selected_device_index is not None:
+            self.dismiss(self.discovered_devices[self.selected_device_index])
+        else:
+            self.dismiss()
 
 
 class HeartRateTile(HorizontalGroup):
@@ -49,73 +66,68 @@ class HeartRateTile(HorizontalGroup):
         self.query_one(Digits).update(f"{hr}" if hr > 0 else "---")
 
 
-class UpdateThread(threading.Thread):
-    def __init__(self, app: "FitnessApp") -> None:
-        self._app = app
-        self._canceled = threading.Event()
-        super().__init__()
-
-    def run(self) -> None:
-        self._app.append_log("Starting update thread...")
-        discover_devices(self._app)
-        self._app.append_log("After...")
-        while True:
-            if self._canceled.is_set():
-                return
-
-            # Sleep for 1 second
-            asyncio.sleep(100)
-
-    def cancel(self) -> None:
-        self._canceled.set()
-
-
 class FitnessApp(App):
-
+    hr_worker: Worker = None
     hr: reactive[int] = reactive(0)
-
-    def __init__(self):
-        super().__init__()
-        self._update_thread = UpdateThread(self)
-
     CSS_PATH = "fitness-app.tcss"
-
     BINDINGS = [
         ("h", "connect_hr('red')", "Connect HR")
     ]
 
     def compose(self) -> ComposeResult:
-        yield Header("Fitness App")
+        yield Header(show_clock=True)
         yield Footer()
-        yield VerticalScroll(HeartRateTile().data_bind(FitnessApp.hr),
-                             Button("Connect HR", name="connect_hr", variant="primary"))
+        yield HorizontalScroll(HeartRateTile().data_bind(FitnessApp.hr),
+                             Button("Connect HR", id="connect-hr", variant="success"),
+                             Button("Disconnect HR", id="disconnect-hr", variant="error"))
         yield Log()
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        global current_hr
-        self.query_one(Log).write_line("Button pressed!")
-        current_hr += 1
+    @on(Button.Pressed, "#connect-hr")
+    def connect_hr_pressed(self, event: Button.Pressed) -> None:
+        self.append_log("Discovering HR devices...")
+        self.push_screen(BluetoothDevicePicker(), self.hr_device_selected)
+
+    @on(Button.Pressed, "#disconnect-hr")
+    def disconnect_hr_pressed(self, event: Button.Pressed) -> None:
+        self.append_log("Cancelling HR worker...")
+        if self.hr_worker and self.hr_worker.is_running:
+            self.hr_worker.cancel()
+        self.hr = 0
+
+    async def hr_device_selected(self, device: BLEDevice) -> None:
+        if device is not None:
+            self.append_log(f"Connecting to {device.name}...")
+            self.hr_worker = self.connect_hr(device)
+        else:
+            self.append_log("No device selected.")
 
     def append_log(self, message: str) -> None:
         self.query_one(Log).write_line(message)
 
-    def update_hr(self) -> None:
-        self.hr = current_hr
-
     def on_mount(self) -> None:
-        self.update_hr()
-        self.set_interval(1, self.update_hr)
-        self.query_one(Log).write_line("Welcome to the Fitness App!")
-        self._update_thread.start()
+        self.append_log("Welcome to the Fitness App!")
 
     def on_unmount(self) -> None:
-        self._update_thread.cancel()
-        if self._update_thread.is_alive():
-            self._update_thread.join()
+        pass
 
-    def action_connect_hr(self) -> None:
+    @work(thread=False)
+    async def connect_hr(self, device) -> None:
+        self.append_log("Subscribing for HR notifications...")
+
+        def heart_rate_handler(sender, data):
+            self.hr = int(data[1])
+
+        async with BleakClient(device) as client:
+            await client.start_notify("00002a37-0000-1000-8000-00805f9b34fb", heart_rate_handler)
+            while True:
+                await asyncio.sleep(1)
+                # TODO: Handle disconnection
+        self.append_log("Worker exit...")
+
+    async def action_connect_hr(self) -> None:
         """ Connect to HR Monitor """
-        print("Connecting to HR Monitor")
+        self.append_log("Connecting to HR Monitor")
+        self.hr_worker = self.connect_hr()
 
 
 if __name__ == "__main__":

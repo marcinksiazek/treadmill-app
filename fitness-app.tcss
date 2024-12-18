@@ -6,8 +6,34 @@ HeartRateTile {
     padding: 1;
 }
 
-Digits {
+HeartRateTile > Digits {
     text-align: center;
     color: $foreground-muted;
     height: 3;
+}
+
+BluetoothDevicePicker {
+    align: center middle;
+}
+
+BluetoothDevicePicker > Container {
+    width: auto;
+    height: auto;
+    align: center middle;
+    padding: 1 2;
+    background: $boost;
+}
+
+BluetoothDevicePicker > Container > Label {
+    width: 100%;
+    content-align-horizontal: center;
+}
+
+BluetoothDevicePicker > Container > Horizontal {
+    height: auto;
+    width: auto;
+}
+
+BluetoothDevicePicker > Container > Horizontal > Button {
+    margin: 1 2;
 }
